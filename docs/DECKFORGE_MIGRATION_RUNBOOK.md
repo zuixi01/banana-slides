@@ -98,6 +98,26 @@ DOCKER_IMAGE_FRONTEND=registry.example/banana-frontend:sha-<git-sha>
 
 也可以使用 `image@sha256:<digest>`。
 
+### 5.1 本地 all-in-one 镜像验收
+
+Docker Desktop 不可用时，可在 D 盘隔离的 `Ubuntu-24.04` WSL 构建环境使用 Buildah/Podman；这只用于本地验收，不替代 CI 推送和服务器拉取不可变镜像的发布流程。
+
+```powershell
+wsl -d Ubuntu-24.04 -u root -- bash -lc "export STORAGE_DRIVER=vfs; buildah bud --format docker --isolation chroot --layers -f '/mnt/d/AI PPT/banana-slides-next/Dockerfile.allinone' --build-arg APP_COMMIT_SHA=<full-git-sha> --build-arg APP_COMMIT_SHORT_SHA=<short-git-sha> -t localhost/banana-slides-deckforge:sha-<short-git-sha> '/mnt/d/AI PPT/banana-slides-next'"
+
+wsl -d Ubuntu-24.04 -u root -- bash -lc "export STORAGE_DRIVER=vfs; podman run -d --name banana-g11-final -p 127.0.0.1:18080:80 localhost/banana-slides-deckforge:sha-<short-git-sha>"
+```
+
+验收：
+
+```powershell
+curl.exe -fsS http://127.0.0.1:18080/health
+curl.exe -fsS http://127.0.0.1:18080/live
+curl.exe -fsS http://127.0.0.1:18080/ready
+```
+
+未注入模型凭据的隔离容器中，`/health/model` 返回 503 `missing_credentials` 是预期结果。生产环境必须配置凭据并要求该接口返回 200。
+
 ## 6. 服务器标准发布（本次未执行）
 
 服务器只作为部署目标。任何远程发布前，先执行并汇总：

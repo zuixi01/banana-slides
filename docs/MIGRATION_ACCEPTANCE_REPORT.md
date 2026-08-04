@@ -73,14 +73,24 @@
 |---|---|
 | 旧 Deckforge | 26 files / 89 tests passed |
 | Banana 前端 | 27 files / 203 tests passed |
-| Banana 后端 | 621 collected / 614 passed / 7 external-service skips |
+| Banana 后端 | 625 collected / 618 passed / 7 external-service skips |
 | 旧 Deckforge production build | passed |
 | Banana frontend production build | passed |
 | `docker-compose.prod.yml` immutable image config | passed |
-| All-in-one Docker image local build | blocked：Docker VM 数据盘发生 EXT4 写入 I/O error；未自动重试 |
-| 真实浏览器验收 | passed |
+| All-in-one Docker image local build | passed：Buildah Docker v2 image + Podman runtime |
+| 真实浏览器验收 | passed（含最终容器） |
 
 上游原有 Windows 路径分隔符和临时图片句柄问题已修复；测试模式不再读取本地 `.env`，防止真实 Provider 配置污染测试和失败日志。
+
+最终本地镜像：
+
+- tag：`localhost/banana-slides-deckforge:sha-6d1bc68`
+- Git SHA：`6d1bc685a720f542406d9863d0ff6d14023b2073`
+- image ID：`ed53bc3c7861c25138bc406af7f139ee637cc333f4da77be89b6660d70135bb2`
+- local manifest digest：`sha256:cb330a4affbe5b7ab6d9bbbf71a4478edca9ca1c00b96bc5d4c485012cac2b37`
+- 容器状态：`running / healthy`
+- 容器浏览器截图：`artifacts/migration/ui/g11-final-container.png`
+- `/health`、`/live`、`/ready` 均返回 JSON 200；隔离容器未注入凭据，因此 `/health/model` 按设计返回 JSON 503 `missing_credentials`。
 
 ## 6. 新增工程能力
 
@@ -101,7 +111,7 @@
 
 - 未配置用户 GitHub Fork `origin`。
 - 未向镜像仓库 push，因此还没有真实 registry digest；CI 已在 push 事件中实现 digest 记录。
-- 本地 all-in-one 镜像构建在 BuildKit 阶段触发 Docker VM `sdd` 写入 I/O error、EXT4 journal 更新失败并导致 Docker Desktop 停止。诊断时 C 盘仅剩约 3.22 GiB，Docker 数据盘 `docker_data.vhdx` 位于 C 盘且约 42.1 GiB。按失败熔断规则未自动重试、重启、迁移数据或清理缓存；继续前需要用户确认安全释放/扩容 C 盘并重启 Docker Desktop。
+- Docker Desktop BuildKit 曾因 VM `sdd`/EXT4 写入 I/O error 停止，且 C 盘仅余约 3.22 GiB。按熔断规则未重启、清理或迁移原 Docker 数据；改在 D 盘隔离 WSL 环境使用 Buildah/Podman 完成镜像构建与容器验收，旧 Docker 数据保持原状。
 - 未部署、构建、清理或重启任何远程服务器。
 - AGPL-3.0 本地开发不受阻；闭源商业 SaaS 发布前仍需商业授权或法律评估。
 
