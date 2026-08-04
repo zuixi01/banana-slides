@@ -2,7 +2,7 @@
 export type PageStatus = 'DRAFT' | 'GENERATING_DESCRIPTION' | 'DESCRIPTION_GENERATED' | 'QUEUED' | 'GENERATING' | 'COMPLETED' | 'FAILED';
 
 // 项目状态
-export type ProjectStatus = 'DRAFT' | 'OUTLINE_GENERATED' | 'DESCRIPTIONS_GENERATED' | 'COMPLETED';
+export type ProjectStatus = 'DRAFT' | 'OUTLINE_GENERATED' | 'DESCRIPTIONS_GENERATED' | 'DESCRIPTIONS_CONFIRMED' | 'COMPLETED';
 
 // 大纲内容
 export interface OutlineContent {
@@ -11,20 +11,28 @@ export interface OutlineContent {
 }
 
 // 描述内容 - 支持两种格式：后端可能返回纯文本或结构化内容
-export type DescriptionContent =
-  | {
-      // 格式1: 后端返回的纯文本格式
-      text: string;
-      extra_fields?: Record<string, string>;
-      layout_suggestion?: string; // 向后兼容
-    }
-  | {
-      // 格式2: 类型定义中的结构化格式
-      title: string;
-      text_content: string[];
-      extra_fields?: Record<string, string>;
-      layout_suggestion?: string; // 向后兼容
-    };
+export interface DescriptionContent {
+  text?: string;
+  title?: string;
+  text_content?: string[];
+  extra_fields?: Record<string, string>;
+  layout_suggestion?: string;
+  schema_version?: number;
+  screenText?: {
+    title: string;
+    subtitle?: string;
+    body: string[];
+    dataLabels: string[];
+  };
+  visualAssets?: Array<{
+    type: 'chart' | 'photo' | 'illustration' | 'icon' | 'diagram' | string;
+    instruction: string;
+    materialIds: string[];
+  }>;
+  layout?: { structure: string; emphasis: string; density: 'low' | 'medium' | 'high' };
+  speakerNotes?: string;
+  brandConstraints?: string[];
+}
 
 // 图片版本
 export interface ImageVersion {
@@ -97,6 +105,8 @@ export interface Page {
   created_at?: string;
   updated_at?: string;
   image_versions?: ImageVersion[]; // 历史版本列表
+  has_description_snapshot?: boolean;
+  image_stale?: boolean;
   // 页级模板（per-page template）
   template_asset_id?: string | null;
   template_style_text?: string | null;
@@ -143,9 +153,25 @@ export interface Project {
   enable_icon_subject_extraction?: boolean; // 是否对小尺寸图标走百度智能抠图（透明背景）
   image_aspect_ratio?: string; // 画面比例（如 16:9, 4:3）
   status: ProjectStatus;
+  current_outline_version_id?: string | null;
+  confirmed_outline_version_id?: string | null;
+  descriptions_confirmed_at?: string | null;
   pages: Page[];
   created_at: string;
   updated_at: string;
+}
+
+export interface OutlineVersion {
+  id: string;
+  project_id: string;
+  version: number;
+  parent_version_id?: string | null;
+  status: 'draft' | 'confirmed' | 'superseded';
+  instruction?: string | null;
+  diff?: { changed_count?: number; added?: any[]; removed?: any[]; changed?: any[]; moved?: any[] };
+  outline?: Array<{ page_id?: string; order_index: number; part?: string | null; outline_content: { title?: string; points?: string[] } }>;
+  created_at?: string;
+  confirmed_at?: string | null;
 }
 
 /**

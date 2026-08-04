@@ -321,7 +321,7 @@ import { PagePropertiesDrawer, readStoredDrawerWidth } from '@/components/previe
 import { useProjectStore } from '@/store/useProjectStore';
 import { useExportTasksStore, type ExportTaskType } from '@/store/useExportTasksStore';
 import { getImageUrl } from '@/api/client';
-import { getPageImageVersions, setCurrentImageVersion, updateProject, uploadTemplate, exportPPTX as apiExportPPTX, exportPDF as apiExportPDF, exportImages as apiExportImages, exportEditablePPTX as apiExportEditablePPTX, exportVideo as apiExportVideo, getSettings, getElevenLabsVoices, updateSettings } from '@/api/endpoints';
+import { getPageImageVersions, setCurrentImageVersion, updateProject, uploadTemplate, exportPPTX as apiExportPPTX, exportPDF as apiExportPDF, exportImages as apiExportImages, exportEditablePPTX as apiExportEditablePPTX, exportVideo as apiExportVideo, getSettings, getElevenLabsVoices, updateSettings, listProjectTasks } from '@/api/endpoints';
 import type { ImageVersion, DescriptionContent, ExportExtractorMethod, ExportInpaintMethod, Page, NarrationConfig } from '@/types';
 import { normalizeErrorMessage } from '@/utils';
 
@@ -523,6 +523,7 @@ export const SlidePreview: React.FC = () => {
     syncProject,
     generatePageImage,
     generateImages,
+    pollImageTask,
     editPageImage,
     deletePageById,
     updatePageLocal,
@@ -585,6 +586,8 @@ export const SlidePreview: React.FC = () => {
   const [outputLanguage, setOutputLanguage] = useState<string>('zh');
   const [imageQualityControlEnabled, setImageQualityControlEnabled] = useState(false);
   const [isSavingImageQualityControl, setIsSavingImageQualityControl] = useState(false);
+  const templateGateHandledRef = useRef(false);
+  const resumedTaskIdsRef = useRef<Set<string>>(new Set());
   useEffect(() => { localStorage.setItem('elevenLabsEnabled', String(elevenLabsEnabled)); }, [elevenLabsEnabled]);
   useEffect(() => { if (elevenLabsVoiceId) localStorage.setItem('elevenLabsVoiceId', elevenLabsVoiceId); }, [elevenLabsVoiceId]);
   useEffect(() => { localStorage.setItem('videoSpeed', String(videoSpeed)); }, [videoSpeed]);
@@ -806,6 +809,32 @@ export const SlidePreview: React.FC = () => {
     loadTemplates();
   }, [projectId, currentProject, syncProject]);
 
+  // Reattach task polling after a browser refresh while the backend worker
+  // is still alive. A process restart marks orphaned tasks INTERRUPTED.
+  useEffect(() => {
+    if (!projectId || !currentProject || currentProject.id !== projectId) return;
+    const resume = async () => {
+      try {
+        const response = await listProjectTasks(projectId, 'active');
+        const imageTasks = (response.data?.tasks || []).filter(
+          (task) => task.task_type === 'GENERATE_IMAGES'
+        );
+        const pageIds = currentProject.pages
+          .filter((page) => page.id && ['QUEUED', 'GENERATING'].includes(page.status))
+          .map((page) => page.id as string);
+        for (const task of imageTasks) {
+          if (!resumedTaskIdsRef.current.has(task.task_id) && pageIds.length > 0) {
+            resumedTaskIdsRef.current.add(task.task_id);
+            void pollImageTask(task.task_id, pageIds);
+          }
+        }
+      } catch (error) {
+        console.error('恢复图片生成任务失败:', error);
+      }
+    };
+    void resume();
+  }, [projectId, currentProject?.id, currentProject?.pages, pollImageTask]);
+
   // 每页独立模板：加载项目模板库（供转统一模板弹层使用）
   useEffect(() => {
     if (projectId && currentProject?.template_mode === 'multi') {
@@ -865,6 +894,24 @@ export const SlidePreview: React.FC = () => {
       // 如果用户正在编辑，则不更新本地状态
     }
   }, [currentProject?.id, currentProject?.extra_requirements, currentProject?.template_style, currentProject?.image_aspect_ratio, currentProject?.export_extractor_method, currentProject?.export_inpaint_method, currentProject?.export_allow_partial, currentProject?.enable_icon_subject_extraction]);
+
+  // Single-template projects configure their visual template or text style in
+  // this modal. Open it on entry from the description step and recover legacy
+  // projects that previously reached preview without satisfying this gate.
+  useEffect(() => {
+    if (!currentProject || currentProject.template_mode === 'multi' || templateGateHandledRef.current) return;
+    const requested = Boolean((location.state as { openTemplateSetup?: boolean } | null)?.openTemplateSetup);
+    const missingTemplate = !currentProject.template_image_url && !currentProject.template_style?.trim();
+    if (requested || missingTemplate) {
+      templateGateHandledRef.current = true;
+      setUseTextStyleMode(missingTemplate);
+      setDraftTemplateStyle(currentProject.template_style || '');
+      setIsTemplateModalOpen(true);
+      if (missingTemplate) {
+        show({ message: '请先选择视觉模板或保存文字风格，再生成幻灯片。', type: 'info', duration: 7000 });
+      }
+    }
+  }, [currentProject?.id, currentProject?.template_mode, currentProject?.template_image_url, currentProject?.template_style, location.state, show]);
 
   // 加载当前页面的历史版本
   useEffect(() => {
@@ -948,6 +995,35 @@ export const SlidePreview: React.FC = () => {
   }, []);
 
   const handleGenerateAll = async () => {
+    if (!currentProject || !projectId) return;
+
+    const targetPages = isMultiSelectMode && selectedPageIds.size > 0
+      ? currentProject.pages.filter((page) => page.id && selectedPageIds.has(page.id))
+      : currentProject.pages;
+    const missingTemplatePages = currentProject.template_mode === 'multi'
+      ? targetPages.filter((page) => !page.template_asset_id && !page.template_style_text?.trim())
+      : [];
+    const singleTemplateMissing = currentProject.template_mode !== 'multi'
+      && !currentProject.template_image_url
+      && !currentProject.template_style?.trim();
+
+    if (singleTemplateMissing) {
+      setUseTextStyleMode(true);
+      setDraftTemplateStyle(currentProject.template_style || '');
+      setIsTemplateModalOpen(true);
+      show({ message: '尚未配置视觉风格。请先选择模板或保存文字风格，然后再次生成。', type: 'warning', duration: 7000 });
+      return;
+    }
+    if (missingTemplatePages.length > 0) {
+      show({
+        message: `还有 ${missingTemplatePages.length} 页未配置模板或文字风格，请先完成模板配置。`,
+        type: 'warning',
+        duration: 7000,
+      });
+      navigate(`/project/${projectId}/template-setup`);
+      return;
+    }
+
     // 先检查分辨率，如果是1K则显示警告
     await checkResolutionAndExecute(async () => {
       const pageIds = getSelectedPageIdsForExport();

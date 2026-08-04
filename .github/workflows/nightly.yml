@@ -127,7 +127,7 @@ jobs:
         if: always()
         run: |
           docker compose down -v
-          docker system prune -f
+          docker compose down || true
 
   security-scan:
     name: Security Scan

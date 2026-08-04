@@ -2,7 +2,7 @@
 Material Controller - handles standalone material image generation
 """
 import json
-from flask import Blueprint, request, current_app, send_file
+from flask import Blueprint, request, current_app, send_file, g
 from models import db, Project, Material, Task
 from utils import success_response, error_response, not_found, bad_request
 from services import FileService
@@ -45,10 +45,13 @@ def _generate_image_caption(filepath: str) -> str:
     """Generate AI caption for an uploaded image. Returns empty string on failure."""
     if filepath.lower().endswith('.svg'):
         return ""
+    source_image = None
+    image = None
     try:
         from PIL import Image
 
-        image = Image.open(filepath)
+        source_image = Image.open(filepath)
+        image = source_image
         image.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
 
         output_lang = current_app.config.get('OUTPUT_LANGUAGE', 'zh')
@@ -164,11 +167,16 @@ def _generate_image_caption(filepath: str) -> str:
     except Exception as e:
         logger.warning(f"Failed to generate caption for {filepath}: {e}")
         return ""
+    finally:
+        if image is not None and image is not source_image:
+            image.close()
+        if source_image is not None:
+            source_image.close()
 
 
 def _build_material_query(filter_project_id: str):
     """Build common material query with project validation."""
-    query = Material.query
+    query = Material.query.filter(Material.workspace_id == g.current_workspace_id)
 
     if filter_project_id == 'all':
         return query, None
@@ -274,7 +282,7 @@ def _save_material_file(file, target_project_id: Optional[str]):
     filepath = materials_dir / unique_filename
     file.save(str(filepath))
 
-    relative_path = str(filepath.relative_to(file_service.upload_folder))
+    relative_path = filepath.relative_to(file_service.upload_folder).as_posix()
     if target_project_id:
         image_url = file_service.get_file_url(target_project_id, 'materials', unique_filename)
     else:

@@ -123,7 +123,8 @@ import { Button, Loading, useConfirm, useToast, AiRefineInput, FilePreviewModal,
 import { MarkdownTextarea, type MarkdownTextareaRef } from '@/components/shared/MarkdownTextarea';
 import { OutlineCard } from '@/components/outline/OutlineCard';
 import { useProjectStore } from '@/store/useProjectStore';
-import { refineOutline, updateProject, addPages } from '@/api/endpoints';
+import { refineOutline, updateProject, addPages, listOutlineVersions, confirmOutlineVersion, snapshotOutlineVersion, restoreOutlineVersion } from '@/api/endpoints';
+import type { OutlineVersion } from '@/types';
 import { useImagePaste, buildMaterialsMarkdown } from '@/hooks/useImagePaste';
 import type { Material } from '@/types';
 import { exportProjectToMarkdown, parseMarkdownPages } from '@/utils/projectUtils';
@@ -185,6 +186,9 @@ export const OutlineEditor: React.FC = () => {
   const [isAiRefining, setIsAiRefining] = useState(false);
   const [previewFileId, setPreviewFileId] = useState<string | null>(null);
   const [isPanelOpen, setIsPanelOpen] = useState(true);
+  const [outlineVersions, setOutlineVersions] = useState<OutlineVersion[]>([]);
+  const [isConfirmingOutline, setIsConfirmingOutline] = useState(false);
+  const [isRestoringOutline, setIsRestoringOutline] = useState(false);
 
   // Skeleton fade-out: keep it mounted briefly after streaming ends
   const [skeletonVisible, setSkeletonVisible] = useState(false);
@@ -370,6 +374,42 @@ export const OutlineEditor: React.FC = () => {
     }
   }, [projectId, currentProject, syncProject]);
 
+  const refreshOutlineVersions = useCallback(async () => {
+    if (!projectId || !currentProject?.pages.length) return;
+    try {
+      const response = await listOutlineVersions(projectId);
+      setOutlineVersions(response.data?.versions || []);
+      await syncProject(projectId);
+    } catch (error) {
+      console.error('加载大纲版本失败:', error);
+    }
+  }, [projectId, currentProject?.pages.length, syncProject]);
+
+  useEffect(() => {
+    void refreshOutlineVersions();
+  }, [refreshOutlineVersions]);
+
+  const outlineSignature = useMemo(() => JSON.stringify((currentProject?.pages || []).map((page) => ({
+    id: page.id,
+    order: page.order_index,
+    part: page.part,
+    outline: page.outline_content,
+  }))), [currentProject?.pages]);
+
+  useEffect(() => {
+    if (!projectId || !currentProject?.pages.length || outlineVersions.length === 0) return;
+    const timer = setTimeout(async () => {
+      try {
+        await saveAllPages();
+        await snapshotOutlineVersion(projectId);
+        await refreshOutlineVersions();
+      } catch (error) {
+        console.error('保存大纲版本失败:', error);
+      }
+    }, 1800);
+    return () => clearTimeout(timer);
+  }, [outlineSignature, projectId, outlineVersions.length, saveAllPages, refreshOutlineVersions]);
+
   // 拖拽传感器配置
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -453,6 +493,7 @@ export const OutlineEditor: React.FC = () => {
     try {
       const response = await refineOutline(projectId, requirement, previousRequirements);
       await syncProject(projectId);
+      await refreshOutlineVersions();
       show({
         message: response.data?.message || t('outline.messages.refineSuccess'),
         type: 'success'
@@ -465,7 +506,40 @@ export const OutlineEditor: React.FC = () => {
       show({ message: errorMessage, type: 'error' });
       throw error;
     }
-  }, [currentProject, projectId, syncProject, show]);
+  }, [currentProject, projectId, syncProject, show, refreshOutlineVersions]);
+
+  const currentOutlineVersion = outlineVersions.find((version) => version.id === currentProject?.current_outline_version_id) || outlineVersions[0];
+  const outlineConfirmed = Boolean(currentOutlineVersion && currentProject?.confirmed_outline_version_id === currentOutlineVersion.id);
+
+  const handleConfirmOutline = useCallback(async () => {
+    if (!projectId || !currentOutlineVersion || isConfirmingOutline) return;
+    setIsConfirmingOutline(true);
+    try {
+      const response = await confirmOutlineVersion(projectId, currentOutlineVersion.id);
+      await syncProject(projectId);
+      await refreshOutlineVersions();
+      show({ message: response.data?.message || '大纲已确认', type: 'success' });
+    } catch (error: any) {
+      show({ message: error?.response?.data?.error?.message || '确认大纲失败', type: 'error' });
+    } finally {
+      setIsConfirmingOutline(false);
+    }
+  }, [projectId, currentOutlineVersion, isConfirmingOutline, syncProject, refreshOutlineVersions, show]);
+
+  const handleRestoreOutline = useCallback(async (versionId: string) => {
+    if (!projectId || !versionId || versionId === currentOutlineVersion?.id || isRestoringOutline) return;
+    setIsRestoringOutline(true);
+    try {
+      await restoreOutlineVersion(projectId, versionId);
+      await syncProject(projectId);
+      await refreshOutlineVersions();
+      show({ message: '已恢复为新的大纲草稿，请确认后继续。', type: 'success' });
+    } catch (error: any) {
+      show({ message: error?.response?.data?.error?.message || '恢复大纲版本失败', type: 'error' });
+    } finally {
+      setIsRestoringOutline(false);
+    }
+  }, [projectId, currentOutlineVersion?.id, isRestoringOutline, syncProject, refreshOutlineVersions, show]);
 
   // 导出大纲为 Markdown 文件
   const handleExportOutline = useCallback(() => {
@@ -560,11 +634,36 @@ export const OutlineEditor: React.FC = () => {
 
           {/* 右侧：操作按钮 */}
           <div className="flex items-center gap-1.5 md:gap-2 flex-shrink-0">
+            {currentOutlineVersion && (
+              <div className={`hidden sm:flex items-center gap-2 rounded-lg border px-3 py-2 text-xs ${outlineConfirmed ? 'border-green-200 bg-green-50 text-green-700' : 'border-amber-200 bg-amber-50 text-amber-700'}`}>
+                <select
+                  aria-label="大纲版本"
+                  className="bg-transparent font-semibold outline-none"
+                  value={currentOutlineVersion.id}
+                  onChange={(event) => void handleRestoreOutline(event.target.value)}
+                  disabled={isRestoringOutline || isAiRefining || isOutlineStreaming}
+                >
+                  {outlineVersions.map((version) => (
+                    <option key={version.id} value={version.id}>V{version.version} · {version.status === 'confirmed' ? '已确认' : version.status === 'draft' ? '草稿' : '历史'}</option>
+                  ))}
+                </select>
+                <span>{outlineConfirmed ? '已确认' : '草稿'}</span>
+              </div>
+            )}
+            {!outlineConfirmed && currentOutlineVersion && (
+              <Button variant="secondary" size="sm" onClick={handleConfirmOutline} disabled={isConfirmingOutline || isAiRefining || isOutlineStreaming}>
+                {isConfirmingOutline ? '确认中…' : '确认大纲'}
+              </Button>
+            )}
             <Button
               variant="primary"
               size="sm"
               icon={<ArrowRight size={16} className="md:w-[18px] md:h-[18px]" />}
               onClick={async () => {
+                if (!outlineConfirmed) {
+                  show({ message: '请先确认当前大纲版本，再进入逐页描述。', type: 'warning' });
+                  return;
+                }
                 if (isInputDirty && projectId && currentProject && !isBlankProject) {
                   const field = currentProject.creation_type === 'outline'
                     ? 'outline_text'
@@ -580,6 +679,7 @@ export const OutlineEditor: React.FC = () => {
                 navigate(`/project/${projectId}/detail`);
               }}
               className="text-xs md:text-sm"
+              disabled={!outlineConfirmed || isAiRefining || isOutlineStreaming}
             >
               <span className="hidden sm:inline">{t('common.next')}</span>
             </Button>

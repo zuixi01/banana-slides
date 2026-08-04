@@ -51,6 +51,7 @@ def repair_desktop_settings_schema(db):
             'updated_at': 'DATETIME',
         },
         'projects': {
+            'workspace_id': "VARCHAR(36) NOT NULL DEFAULT '00000000-0000-0000-0000-000000000002'",
             'project_title': 'VARCHAR(255)',
             'outline_requirements': 'TEXT',
             'description_requirements': 'TEXT',
@@ -61,8 +62,13 @@ def repair_desktop_settings_schema(db):
             'export_allow_partial': 'BOOLEAN DEFAULT 0',
             'enable_icon_subject_extraction': 'BOOLEAN DEFAULT 1',
             'image_aspect_ratio': "VARCHAR(10) DEFAULT '16:9'",
+            'current_outline_version_id': 'VARCHAR(36)',
+            'confirmed_outline_version_id': 'VARCHAR(36)',
+            'descriptions_confirmed_at': 'DATETIME',
         },
         'pages': {
+            'previous_description_content': 'TEXT',
+            'image_stale': 'BOOLEAN NOT NULL DEFAULT 0',
             'cached_image_path': 'VARCHAR(500)',
             'narration_text': 'TEXT',
             'template_asset_id': 'VARCHAR(36)',
@@ -76,13 +82,17 @@ def repair_desktop_settings_schema(db):
             'file_size': 'INTEGER',
         },
         'materials': {
+            'workspace_id': "VARCHAR(36) NOT NULL DEFAULT '00000000-0000-0000-0000-000000000002'",
             'caption': 'VARCHAR(500)',
             'original_filename': 'VARCHAR(500)',
         },
         'reference_files': {
+            'workspace_id': "VARCHAR(36) NOT NULL DEFAULT '00000000-0000-0000-0000-000000000002'",
             'mineru_batch_id': 'VARCHAR(100)',
         },
         'tasks': {
+            'workspace_id': "VARCHAR(36) NOT NULL DEFAULT '00000000-0000-0000-0000-000000000002'",
+            'idempotency_key': 'VARCHAR(100)',
             'completed_at': 'DATETIME',
         },
         'user_style_templates': {
@@ -111,6 +121,25 @@ def repair_desktop_settings_schema(db):
             conn.execute(text(
                 'UPDATE settings SET baidu_api_key = baidu_ocr_api_key '
                 'WHERE baidu_api_key IS NULL AND baidu_ocr_api_key IS NOT NULL'
+            ))
+
+        # db.create_all creates these tables for fresh desktop installs; seed
+        # the local identity after repairing an older database in place.
+        if {'users', 'workspaces', 'memberships'}.issubset(existing_tables):
+            conn.execute(text(
+                "INSERT OR IGNORE INTO users (id,email,display_name,created_at) "
+                "VALUES ('00000000-0000-0000-0000-000000000001','local@banana.invalid','Local User',CURRENT_TIMESTAMP)"
+            ))
+            conn.execute(text(
+                "INSERT OR IGNORE INTO workspaces (id,name,slug,owner_user_id,created_at) "
+                "VALUES ('00000000-0000-0000-0000-000000000002','Local Workspace','local',"
+                "'00000000-0000-0000-0000-000000000001',CURRENT_TIMESTAMP)"
+            ))
+            conn.execute(text(
+                "INSERT OR IGNORE INTO memberships (id,workspace_id,user_id,role,created_at) "
+                "VALUES ('00000000-0000-0000-0000-000000000003',"
+                "'00000000-0000-0000-0000-000000000002',"
+                "'00000000-0000-0000-0000-000000000001','owner',CURRENT_TIMESTAMP)"
             ))
 
     if repaired:

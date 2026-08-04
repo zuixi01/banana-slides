@@ -25,7 +25,8 @@ if __name__ == '__main__':
 # Load environment variables from project root .env file
 _project_root = Path(__file__).parent.parent
 _env_file = _project_root / '.env'
-load_dotenv(dotenv_path=_env_file, override=not os.getenv('DATABASE_PATH'))
+if os.getenv('TESTING', '').lower() != 'true':
+    load_dotenv(dotenv_path=_env_file, override=not os.getenv('DATABASE_PATH'))
 
 from flask import Flask
 from flask_cors import CORS
@@ -35,7 +36,7 @@ from controllers.material_controller import material_bp, material_global_bp
 from controllers.reference_file_controller import reference_file_bp
 from controllers.settings_controller import settings_bp
 from controllers.openai_oauth_controller import openai_oauth_bp
-from controllers import project_bp, page_bp, template_bp, user_template_bp, user_style_template_bp, export_bp, file_bp, style_bp, template_assets_bp, page_template_bp, template_mode_bp
+from controllers import project_bp, page_bp, template_bp, user_template_bp, user_style_template_bp, export_bp, file_bp, style_bp, template_assets_bp, page_template_bp, template_mode_bp, workspace_bp
 
 
 # Enable SQLite WAL mode for all connections
@@ -93,7 +94,7 @@ def create_app():
 
     if db_path_env:
         os.makedirs(os.path.dirname(db_path_env), exist_ok=True)
-        app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{Path(db_path_env).as_posix()}'
+        app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path_env}'
     if upload_folder_env:
         os.makedirs(upload_folder_env, exist_ok=True)
         app.config['UPLOAD_FOLDER'] = upload_folder_env
@@ -160,6 +161,7 @@ def create_app():
     app.register_blueprint(settings_bp)
     app.register_blueprint(openai_oauth_bp)
     app.register_blueprint(style_bp)
+    app.register_blueprint(workspace_bp)
 
     with app.app_context():
         if db_path_env:
@@ -188,6 +190,30 @@ def create_app():
                 db.create_all()
                 from desktop_bootstrap import repair_desktop_settings_schema
                 repair_desktop_settings_schema(db)
+        # In-memory worker futures cannot survive a process restart. Persist an
+        # explicit terminal state so refreshed clients never poll forever.
+        from datetime import datetime
+        from sqlalchemy import inspect
+        from models import Task, Page
+        inspector = inspect(db.engine)
+        task_columns = {column['name'] for column in inspector.get_columns('tasks')} if inspector.has_table('tasks') else set()
+        interrupted = (
+            Task.query.filter(Task.status.in_(['PENDING', 'PROCESSING', 'CANCELLATION_REQUESTED'])).all()
+            if {'id', 'status', 'workspace_id'}.issubset(task_columns)
+            else []
+        )
+        if interrupted:
+            for task in interrupted:
+                task.status = 'INTERRUPTED'
+                task.error_message = 'Application restarted before this task completed; retry with a new request.'
+                task.completed_at = datetime.utcnow()
+                for page in Page.query.filter_by(project_id=task.project_id).filter(
+                    Page.status.in_(['QUEUED', 'GENERATING', 'GENERATING_DESCRIPTION'])
+                ).all():
+                    page.status = 'COMPLETED' if page.generated_image_path else (
+                        'DESCRIPTION_GENERATED' if page.description_content else 'DRAFT'
+                    )
+            db.session.commit()
         # Load settings from database and sync to app.config
         _load_settings_to_config(app)
 
@@ -207,10 +233,129 @@ def create_app():
             return
         return jsonify({'error': 'Access code required'}), 403
 
+    @app.before_request
+    def _enforce_workspace_scope():
+        """Resolve local identity and enforce workspace/project isolation centrally."""
+        from flask import g, request, jsonify
+        from models import (
+            db, Membership, Project, ReferenceFile, Material, User, Workspace,
+            DEFAULT_USER_ID, DEFAULT_WORKSPACE_ID,
+        )
+
+        is_api = request.path.startswith('/api/')
+        is_project_file = request.path.startswith('/files/')
+        if not is_api and not is_project_file:
+            return
+        if request.path.startswith('/api/access-code/'):
+            return
+
+        user_id = request.headers.get('X-User-ID', DEFAULT_USER_ID).strip()
+        workspace_id = request.headers.get('X-Workspace-ID', DEFAULT_WORKSPACE_ID).strip()
+        membership = Membership.query.filter_by(
+            user_id=user_id, workspace_id=workspace_id
+        ).first()
+        if (
+            not membership
+            and user_id == DEFAULT_USER_ID
+            and workspace_id == DEFAULT_WORKSPACE_ID
+        ):
+            user = db.session.get(User, DEFAULT_USER_ID)
+            if not user:
+                user = User(
+                    id=DEFAULT_USER_ID, email='local@banana.invalid', display_name='Local User'
+                )
+                db.session.add(user)
+            workspace = db.session.get(Workspace, DEFAULT_WORKSPACE_ID)
+            if not workspace:
+                workspace = Workspace(
+                    id=DEFAULT_WORKSPACE_ID, name='Local Workspace', slug='local',
+                    owner_user_id=DEFAULT_USER_ID,
+                )
+                db.session.add(workspace)
+            db.session.flush()
+            membership = Membership(
+                workspace_id=DEFAULT_WORKSPACE_ID, user_id=DEFAULT_USER_ID, role='owner'
+            )
+            db.session.add(membership)
+            db.session.commit()
+        if not membership:
+            return jsonify({
+                'success': False,
+                'error': {'code': 'WORKSPACE_ACCESS_DENIED', 'message': 'Workspace access denied'},
+            }), 403
+
+        g.current_user_id = user_id
+        g.current_workspace_id = workspace_id
+        g.current_workspace_role = membership.role
+
+        if is_api and request.method not in {'GET', 'HEAD', 'OPTIONS'} and membership.role == 'viewer':
+            return jsonify({
+                'success': False,
+                'error': {'code': 'EDITOR_REQUIRED', 'message': 'Editor permission required'},
+            }), 403
+
+        project_id = (request.view_args or {}).get('project_id')
+        if not project_id and is_project_file:
+            relative = request.path[len('/files/'):]
+            project_id = relative.split('/', 1)[0] if '/' in relative else None
+        if project_id:
+            project = db.session.get(Project, project_id)
+            if project and project.workspace_id != workspace_id:
+                return jsonify({
+                    'success': False,
+                    'error': {'code': 'PROJECT_NOT_FOUND', 'message': 'Project not found'},
+                }), 404
+        file_id = (request.view_args or {}).get('file_id')
+        if file_id and request.path.startswith('/api/reference-files/'):
+            resource = db.session.get(ReferenceFile, file_id)
+            if resource and resource.workspace_id != workspace_id:
+                return jsonify({'success': False, 'error': {'code': 'FILE_NOT_FOUND', 'message': 'Reference file not found'}}), 404
+        material_id = (request.view_args or {}).get('material_id')
+        if material_id:
+            resource = db.session.get(Material, material_id)
+            if resource and resource.workspace_id != workspace_id:
+                return jsonify({'success': False, 'error': {'code': 'MATERIAL_NOT_FOUND', 'message': 'Material not found'}}), 404
+
     # Health check endpoint
     @app.route('/health')
     def health_check():
         return {'status': 'ok', 'message': 'Banana Slides API is running'}
+
+    @app.route('/live')
+    def live_check():
+        return {'status': 'ok'}
+
+    @app.route('/ready')
+    def ready_check():
+        from sqlalchemy import text
+        checks = {
+            'database': False,
+            'storage': os.path.isdir(app.config['UPLOAD_FOLDER']) and os.access(app.config['UPLOAD_FOLDER'], os.W_OK),
+            'text_model': bool(app.config.get('TEXT_MODEL')),
+            'image_model': bool(app.config.get('IMAGE_MODEL')),
+        }
+        try:
+            db.session.execute(text('SELECT 1'))
+            checks['database'] = True
+        except Exception:
+            db.session.rollback()
+        ready = all(checks.values())
+        return {'status': 'ready' if ready else 'not_ready', 'checks': checks}, 200 if ready else 503
+
+    @app.route('/health/model')
+    def model_health_check():
+        provider = app.config.get('AI_PROVIDER_FORMAT', 'unknown')
+        credential_configured = bool(
+            app.config.get('OPENAI_API_KEY') if provider == 'openai'
+            else app.config.get('GOOGLE_API_KEY')
+        )
+        return {
+            'status': 'configured' if credential_configured else 'missing_credentials',
+            'provider': provider,
+            'text_model': app.config.get('TEXT_MODEL'),
+            'image_model': app.config.get('IMAGE_MODEL'),
+            'credential_configured': credential_configured,
+        }, 200 if credential_configured else 503
 
     # Access code verification
     @app.route('/api/access-code/check', methods=['GET'])

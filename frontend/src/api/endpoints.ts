@@ -385,6 +385,26 @@ export const refineOutline = async (
   return response.data;
 };
 
+export const listOutlineVersions = async (projectId: string): Promise<ApiResponse<{ versions: import('@/types').OutlineVersion[] }>> => {
+  const response = await apiClient.get(`/api/projects/${projectId}/outline-versions`);
+  return response.data;
+};
+
+export const confirmOutlineVersion = async (projectId: string, versionId: string): Promise<ApiResponse<{ version: import('@/types').OutlineVersion; message: string }>> => {
+  const response = await apiClient.post(`/api/projects/${projectId}/outline-versions/${versionId}/confirm`);
+  return response.data;
+};
+
+export const snapshotOutlineVersion = async (projectId: string, instruction = '手动编辑大纲'): Promise<ApiResponse<{ version: import('@/types').OutlineVersion }>> => {
+  const response = await apiClient.post(`/api/projects/${projectId}/outline-versions/snapshot`, { instruction });
+  return response.data;
+};
+
+export const restoreOutlineVersion = async (projectId: string, versionId: string): Promise<ApiResponse> => {
+  const response = await apiClient.post(`/api/projects/${projectId}/outline-versions/${versionId}/restore`);
+  return response.data;
+};
+
 /**
  * 根据用户要求修改页面描述
  * @param projectId 项目ID
@@ -423,6 +443,22 @@ export const generateImages = async (projectId: string, language?: OutputLanguag
   const response = await apiClient.post<ApiResponse>(
     `/api/projects/${projectId}/generate/images`,
     { language: lang, page_ids: pageIds }
+  );
+  return response.data;
+};
+
+export const confirmDescriptions = async (projectId: string): Promise<ApiResponse> => {
+  const response = await apiClient.post<ApiResponse>(
+    `/api/projects/${projectId}/descriptions/confirm`,
+    {}
+  );
+  return response.data;
+};
+
+export const restorePageDescription = async (projectId: string, pageId: string): Promise<ApiResponse<Page>> => {
+  const response = await apiClient.post<ApiResponse<Page>>(
+    `/api/projects/${projectId}/pages/${pageId}/description/restore`,
+    {}
   );
   return response.data;
 };
@@ -608,6 +644,35 @@ export const addPages = async (projectId: string, pages: Partial<Page>[]): Promi
  */
 export const getTaskStatus = async (projectId: string, taskId: string): Promise<ApiResponse<Task>> => {
   const response = await apiClient.get<ApiResponse<Task>>(`/api/projects/${projectId}/tasks/${taskId}`);
+  return response.data;
+};
+
+export const deleteImageVersion = async (
+  projectId: string,
+  pageId: string,
+  versionId: string
+): Promise<ApiResponse<{ version_id: string; deleted_files: number }>> => {
+  const response = await apiClient.delete<ApiResponse<{ version_id: string; deleted_files: number }>>(
+    `/api/projects/${projectId}/pages/${pageId}/image-versions/${versionId}`
+  );
+  return response.data;
+};
+
+export const listProjectTasks = async (
+  projectId: string,
+  status?: 'active'
+): Promise<ApiResponse<{ tasks: Task[] }>> => {
+  const response = await apiClient.get<ApiResponse<{ tasks: Task[] }>>(
+    `/api/projects/${projectId}/tasks${status ? `?status=${status}` : ''}`
+  );
+  return response.data;
+};
+
+export const cancelProjectTask = async (projectId: string, taskId: string): Promise<ApiResponse<Task>> => {
+  const response = await apiClient.post<ApiResponse<Task>>(
+    `/api/projects/${projectId}/tasks/${taskId}/cancel`,
+    {}
+  );
   return response.data;
 };
 
@@ -1222,6 +1287,14 @@ export const deleteReferenceFile = async (fileId: string): Promise<ApiResponse<{
 export const triggerFileParse = async (fileId: string): Promise<ApiResponse<{ file: ReferenceFile; message: string }>> => {
   const response = await apiClient.post<ApiResponse<{ file: ReferenceFile; message: string }>>(
     `/api/reference-files/${fileId}/parse`
+  );
+  return response.data;
+};
+
+export const cancelFileParse = async (fileId: string): Promise<ApiResponse<{ file: ReferenceFile; message: string }>> => {
+  const response = await apiClient.post<ApiResponse<{ file: ReferenceFile; message: string }>>(
+    `/api/reference-files/${fileId}/cancel-parse`,
+    {}
   );
   return response.data;
 };

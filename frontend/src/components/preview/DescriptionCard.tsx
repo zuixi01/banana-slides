@@ -51,7 +51,7 @@ export interface DescriptionCardProps {
 const getDescriptionText = (descContent: DescriptionContent | undefined): string => {
   if (!descContent) return '';
   if ('text' in descContent) {
-    return descContent.text;
+    return descContent.text || '';
   } else if ('text_content' in descContent && Array.isArray(descContent.text_content)) {
     return descContent.text_content.join('\n');
   }

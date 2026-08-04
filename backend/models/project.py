@@ -13,6 +13,10 @@ class Project(db.Model):
     __tablename__ = 'projects'
     
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    workspace_id = db.Column(
+        db.String(36), db.ForeignKey('workspaces.id'), nullable=False,
+        default=lambda: __import__('services.workspace_context', fromlist=['current_workspace_id']).current_workspace_id()
+    )
     project_title = db.Column(db.String(255), nullable=True)
     idea_prompt = db.Column(db.Text, nullable=True)
     outline_text = db.Column(db.Text, nullable=True)  # 用户输入的大纲文本（用于outline类型）
@@ -33,6 +37,9 @@ class Project(db.Model):
     enable_icon_subject_extraction = db.Column(db.Boolean, nullable=True, default=True)  # 是否对小尺寸图标走百度智能抠图
     image_aspect_ratio = db.Column(db.String(10), nullable=False, server_default='16:9', default='16:9')
     status = db.Column(db.String(50), nullable=False, default='DRAFT')
+    current_outline_version_id = db.Column(db.String(36), nullable=True)
+    confirmed_outline_version_id = db.Column(db.String(36), nullable=True)
+    descriptions_confirmed_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -65,6 +72,7 @@ class Project(db.Model):
         
         data = {
             'project_id': self.id,
+            'workspace_id': self.workspace_id,
             'project_title': self.project_title,
             'idea_prompt': self.idea_prompt,
             'outline_text': self.outline_text,
@@ -82,6 +90,9 @@ class Project(db.Model):
             'enable_icon_subject_extraction': True if self.enable_icon_subject_extraction is None else bool(self.enable_icon_subject_extraction),
             'image_aspect_ratio': self.image_aspect_ratio,
             'status': self.status,
+            'current_outline_version_id': self.current_outline_version_id,
+            'confirmed_outline_version_id': self.confirmed_outline_version_id,
+            'descriptions_confirmed_at': self.descriptions_confirmed_at.isoformat() + 'Z' if self.descriptions_confirmed_at else None,
             'created_at': created_at_str,
             'updated_at': updated_at_str,
         }

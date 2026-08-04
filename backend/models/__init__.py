@@ -26,6 +26,9 @@ from .reference_file import ReferenceFile
 from .settings import Settings
 from .user_style_template import UserStyleTemplate
 from .project_template_asset import ProjectTemplateAsset
+from .outline_version import OutlineVersion
+from .workspace import User, Workspace, Membership, DEFAULT_USER_ID, DEFAULT_WORKSPACE_ID
+from .migration_record import MigrationRecord
 
-__all__ = ['db', 'Project', 'Page', 'Task', 'UserTemplate', 'PageImageVersion', 'Material', 'ReferenceFile', 'Settings', 'UserStyleTemplate', 'ProjectTemplateAsset']
+__all__ = ['db', 'Project', 'Page', 'Task', 'UserTemplate', 'PageImageVersion', 'Material', 'ReferenceFile', 'Settings', 'UserStyleTemplate', 'ProjectTemplateAsset', 'OutlineVersion', 'User', 'Workspace', 'Membership', 'DEFAULT_USER_ID', 'DEFAULT_WORKSPACE_ID', 'MigrationRecord']
 

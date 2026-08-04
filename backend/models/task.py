@@ -4,6 +4,7 @@ Task model for tracking async operations
 import uuid
 import json
 from datetime import datetime
+from sqlalchemy import event, text
 from . import db
 
 
@@ -14,7 +15,12 @@ class Task(db.Model):
     __tablename__ = 'tasks'
     
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    workspace_id = db.Column(
+        db.String(36), db.ForeignKey('workspaces.id'), nullable=False,
+        default=lambda: __import__('services.workspace_context', fromlist=['current_workspace_id']).current_workspace_id(),
+    )
     project_id = db.Column(db.String(36), db.ForeignKey('projects.id'), nullable=False)
+    idempotency_key = db.Column(db.String(100), nullable=True)
     task_type = db.Column(db.String(50), nullable=False)  # GENERATE_DESCRIPTIONS|GENERATE_IMAGES
     status = db.Column(db.String(50), nullable=False, default='PENDING')
     progress = db.Column(db.Text, nullable=True)  # JSON string: {"total": 10, "completed": 5, "failed": 0}
@@ -54,6 +60,8 @@ class Task(db.Model):
         """Convert to dictionary"""
         return {
             'task_id': self.id,
+            'workspace_id': self.workspace_id,
+            'idempotency_key': self.idempotency_key,
             'task_type': self.task_type,
             'status': self.status,
             'progress': self.get_progress(),
@@ -64,4 +72,19 @@ class Task(db.Model):
     
     def __repr__(self):
         return f'<Task {self.id}: {self.task_type} - {self.status}>'
+
+
+@event.listens_for(Task, 'before_insert')
+def _inherit_task_workspace(mapper, connection, target):
+    if target.workspace_id or not target.project_id:
+        return
+    row = connection.execute(
+        text('SELECT workspace_id FROM projects WHERE id = :project_id'),
+        {'project_id': target.project_id},
+    ).first()
+    if row:
+        target.workspace_id = row[0]
+    else:
+        from models.workspace import DEFAULT_WORKSPACE_ID
+        target.workspace_id = DEFAULT_WORKSPACE_ID
 

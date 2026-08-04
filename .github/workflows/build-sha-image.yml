@@ -17,7 +17,7 @@ on:
           - both
         default: allinone
       tag:
-        description: 'Additional Docker tag (e.g. latest). Leave empty to only tag with SHA.'
+        description: 'Optional immutable release tag (vX.Y.Z). The latest tag is rejected.'
         required: false
         type: string
       run_tests:
@@ -48,6 +48,15 @@ jobs:
           echo "full_sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
           echo "short_sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
           echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
+
+      - name: Reject mutable production tags
+        env:
+          CUSTOM_TAG: ${{ inputs.tag }}
+        run: |
+          if [ "$CUSTOM_TAG" = "latest" ]; then
+            echo "::error::The mutable latest tag is forbidden for production images."
+            exit 1
+          fi
 
       - name: Overlay Dockerfiles from main
         run: |

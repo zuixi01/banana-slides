@@ -54,8 +54,8 @@ def _append_extra_fields(
     if not desc_content or not isinstance(desc_content, dict):
         return safe_desc
     extra_fields = desc_content.get('extra_fields')
-    if not extra_fields or not isinstance(extra_fields, dict):
-        return safe_desc
+    if not isinstance(extra_fields, dict):
+        extra_fields = {}
     allowed = allowed_fields if allowed_fields is not None else get_image_prompt_field_names()
     parts = []
     if safe_desc:
@@ -65,6 +65,21 @@ def _append_extra_fields(
             continue
         if name in allowed or Settings.LEGACY_FIELD_EQUIV.get(name) in allowed:
             parts.append(f"{name}：{value}")
+    for asset in desc_content.get('visualAssets') or []:
+        if isinstance(asset, dict) and str(asset.get('instruction') or '').strip():
+            parts.append(f"视觉素材：{asset['instruction']}")
+    layout = desc_content.get('layout')
+    if isinstance(layout, dict):
+        layout_text = '；'.join(
+            str(layout.get(key) or '').strip()
+            for key in ('structure', 'emphasis', 'density')
+            if str(layout.get(key) or '').strip()
+        )
+        if layout_text:
+            parts.append(f"版式要求：{layout_text}")
+    brand = desc_content.get('brandConstraints')
+    if isinstance(brand, list) and brand:
+        parts.append('品牌约束：' + '；'.join(str(item) for item in brand if str(item).strip()))
     return '\n'.join(parts)
 
 
@@ -298,6 +313,12 @@ class TaskManager:
         """Check if task is still running"""
         with self.lock:
             return task_id in self.active_tasks
+
+    def cancel_task(self, task_id: str) -> bool:
+        """Cancel a queued future; running tasks stop cooperatively between calls."""
+        with self.lock:
+            future = self.active_tasks.get(task_id)
+        return bool(future and future.cancel())
     
     def shutdown(self):
         """Shutdown the executor"""
@@ -399,6 +420,7 @@ def save_image_with_version(image, project_id: str, page_id: str, file_service,
     if page_obj:
         page_obj.generated_image_path = image_path
         page_obj.cached_image_path = cached_image_path
+        page_obj.image_stale = False
         page_obj.status = 'COMPLETED'
         page_obj.updated_at = datetime.utcnow()
 
@@ -618,6 +640,9 @@ def generate_descriptions_task(task_id: str, project_id: str, ai_service,
                 # 关键修复：在子线程中也需要应用上下文
                 with app.app_context():
                     try:
+                        current_task = db.session.get(Task, task_id)
+                        if current_task and current_task.status in {'CANCELLATION_REQUESTED', 'CANCELLED'}:
+                            return (page_id, None, 'Task cancelled')
                         # Get singleton AI service instance
                         from services.ai_service_manager import get_ai_service
                         ai_service = get_ai_service()
@@ -683,7 +708,7 @@ def generate_descriptions_task(task_id: str, project_id: str, ai_service,
             # Mark task as completed
             task = Task.query.get(task_id)
             if task:
-                task.status = 'COMPLETED'
+                task.status = 'CANCELLED' if task.status == 'CANCELLATION_REQUESTED' else 'COMPLETED'
                 task.completed_at = datetime.utcnow()
                 db.session.commit()
                 logger.info(f"Task {task_id} COMPLETED - {completed} pages generated, {failed} failed")
@@ -775,6 +800,9 @@ def generate_images_task(task_id: str, project_id: str, ai_service, file_service
                 # 关键修复：在子线程中也需要应用上下文
                 with app.app_context():
                     try:
+                        current_task = db.session.get(Task, task_id)
+                        if current_task and current_task.status in {'CANCELLATION_REQUESTED', 'CANCELLED'}:
+                            return (page_id, None, 'Task cancelled', None)
                         logger.debug(f"Starting image generation for page {page_id}, index {page_index}")
                         # Get page from database in this thread
                         page_obj = Page.query.get(page_id)
@@ -792,6 +820,10 @@ def generate_images_task(task_id: str, project_id: str, ai_service, file_service
                             f"project={project_id} page={page_id}",
                             on_acquire=mark_generating,
                         ):
+                            db.session.expire_all()
+                            current_task = db.session.get(Task, task_id)
+                            if current_task and current_task.status in {'CANCELLATION_REQUESTED', 'CANCELLED'}:
+                                return (page_id, None, 'Task cancelled', None)
                             # Get description content
                             desc_content = page_obj.get_description_content()
                             if not desc_content:
@@ -929,7 +961,7 @@ def generate_images_task(task_id: str, project_id: str, ai_service, file_service
             # Mark task as completed
             task = Task.query.get(task_id)
             if task:
-                task.status = 'COMPLETED'
+                task.status = 'CANCELLED' if task.status == 'CANCELLATION_REQUESTED' else 'COMPLETED'
                 task.completed_at = datetime.utcnow()
                 if resolution_mismatched > 0:
                     logger.warning(f"Task {task_id} has {resolution_mismatched} resolution mismatches")

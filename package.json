@@ -19,6 +19,8 @@
     "dev": "docker compose up",
     "dev:backend": "cd backend && uv run python app.py",
     "dev:frontend": "cd frontend && npm run dev",
+    "start:local": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-local.ps1",
+    "stop:local": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/stop-local.ps1",
     "build": "docker compose build",
     "start": "docker compose up -d",
     "stop": "docker compose down",

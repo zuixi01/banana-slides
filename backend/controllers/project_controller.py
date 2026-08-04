@@ -9,16 +9,21 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
-from flask import Blueprint, request, jsonify, current_app, Response, stream_with_context
+from flask import Blueprint, request, jsonify, current_app, Response, stream_with_context, g
 from sqlalchemy import desc
 from utils.validators import normalize_aspect_ratio
 from sqlalchemy.orm import joinedload
 from werkzeug.exceptions import BadRequest
 from werkzeug.utils import secure_filename
 
-from models import db, Project, Page, Task, ReferenceFile
+from models import db, Project, Page, Task, ReferenceFile, OutlineVersion
 from services import ProjectContext, FileService
 from services.ai_service_manager import get_ai_service
+from services.outline_version_service import (
+    create_version as create_outline_version,
+    ensure_current_version,
+    confirm_version as confirm_outline_version,
+)
 from services.task_manager import (
     task_manager,
     generate_descriptions_task,
@@ -32,6 +37,28 @@ from utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _idempotency(project_id, task_type):
+    """Return the normalized request key and an existing matching task."""
+    key = (request.headers.get('Idempotency-Key') or '').strip()
+    if not key:
+        return None, None
+    if len(key) > 100:
+        raise ValueError('Idempotency-Key must not exceed 100 characters')
+    task = Task.query.filter_by(
+        project_id=project_id, task_type=task_type, idempotency_key=key
+    ).first()
+    return key, task
+
+
+def _idempotent_task_response(task):
+    return success_response({
+        'task_id': task.id,
+        'status': task.status,
+        'progress': task.get_progress(),
+        'idempotent_replay': True,
+    }, status_code=200 if task.status in {'COMPLETED', 'FAILED', 'CANCELLED'} else 202)
 
 project_bp = Blueprint('projects', __name__, url_prefix='/api/projects')
 
@@ -209,9 +236,10 @@ def list_projects():
         offset = max(0, offset)  # Non-negative
 
         # Get total count for pagination
-        total = Project.query.count()
+        query = Project.query.filter(Project.workspace_id == g.current_workspace_id)
+        total = query.count()
 
-        projects = Project.query\
+        projects = query\
             .options(joinedload(Project.pages))\
             .order_by(desc(Project.updated_at))\
             .limit(limit)\
@@ -279,6 +307,7 @@ def create_project():
 
         # Create project
         project = Project(
+            workspace_id=g.current_workspace_id,
             creation_type=creation_type,
             idea_prompt=content if creation_type == 'idea' else None,
             outline_text=content if creation_type == 'outline' else None,
@@ -807,6 +836,8 @@ def generate_descriptions(project_id):
         
         if not project.pages:
             return bad_request("Project must have outline generated first")
+        if project.current_outline_version_id and project.confirmed_outline_version_id != project.current_outline_version_id:
+            return error_response('OUTLINE_CONFIRMATION_REQUIRED', '请先确认当前大纲版本，再生成逐页描述。', 409)
 
         # IMPORTANT: Expire cached objects to ensure fresh data
         db.session.expire_all()
@@ -825,11 +856,16 @@ def generate_descriptions(project_id):
         max_workers = data.get('max_workers', current_app.config.get('MAX_DESCRIPTION_WORKERS', 5))
         language = data.get('language', current_app.config.get('OUTPUT_LANGUAGE', 'zh'))
         detail_level = data.get('detail_level', 'default')
+
+        idempotency_key, existing_task = _idempotency(project_id, 'GENERATE_DESCRIPTIONS')
+        if existing_task:
+            return _idempotent_task_response(existing_task)
         
         # Create task
         task = Task(
             project_id=project_id,
             task_type='GENERATE_DESCRIPTIONS',
+            idempotency_key=idempotency_key,
             status='PENDING'
         )
         task.set_progress({
@@ -899,6 +935,8 @@ def generate_descriptions_stream(project_id):
 
     if not project.pages:
         return bad_request("Project must have outline generated first")
+    if project.current_outline_version_id and project.confirmed_outline_version_id != project.current_outline_version_id:
+        return error_response('OUTLINE_CONFIRMATION_REQUIRED', '请先确认当前大纲版本，再生成逐页描述。', 409)
 
     data = request.get_json() or {}
     language = data.get('language', current_app.config.get('OUTPUT_LANGUAGE', 'zh'))
@@ -1041,6 +1079,12 @@ def generate_images(project_id):
         
         if not project:
             return not_found('Project')
+        if project.current_outline_version_id and not project.descriptions_confirmed_at:
+            return error_response(
+                'DESCRIPTION_CONFIRMATION_REQUIRED',
+                '请先确认逐页描述，再生成幻灯片图片。',
+                409,
+            )
         
         # if project.status not in ['DESCRIPTIONS_GENERATED', 'OUTLINE_GENERATED']:
         #     return bad_request("Project must have descriptions generated first")
@@ -1083,11 +1127,16 @@ def generate_images(project_id):
         max_workers = data.get('max_workers', current_app.config.get('MAX_IMAGE_WORKERS', 8))
         use_template = data.get('use_template', True)
         language = data.get('language', current_app.config.get('OUTPUT_LANGUAGE', 'zh'))
+
+        idempotency_key, existing_task = _idempotency(project_id, 'GENERATE_IMAGES')
+        if existing_task:
+            return _idempotent_task_response(existing_task)
         
         # Create task
         task = Task(
             project_id=project_id,
             task_type='GENERATE_IMAGES',
+            idempotency_key=idempotency_key,
             status='PENDING'
         )
         task.set_progress({
@@ -1171,6 +1220,113 @@ def get_task_status(project_id, task_id):
         return error_response('SERVER_ERROR', str(e), 500)
 
 
+@project_bp.route('/<project_id>/tasks', methods=['GET'])
+def list_project_tasks(project_id):
+    project = Project.query.get(project_id)
+    if not project:
+        return not_found('Project')
+    status = request.args.get('status')
+    query = Task.query.filter_by(project_id=project_id)
+    if status == 'active':
+        query = query.filter(Task.status.in_(['PENDING', 'PROCESSING', 'CANCELLATION_REQUESTED']))
+    tasks = query.order_by(Task.created_at.desc()).limit(100).all()
+    return success_response({'tasks': [task.to_dict() for task in tasks]})
+
+
+@project_bp.route('/<project_id>/tasks/<task_id>/cancel', methods=['POST'])
+def cancel_project_task(project_id, task_id):
+    task = Task.query.filter_by(id=task_id, project_id=project_id).first()
+    if not task:
+        return not_found('Task')
+    if task.status in {'COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED'}:
+        return success_response(task.to_dict())
+    cancelled_before_start = task_manager.cancel_task(task_id)
+    task.status = 'CANCELLED' if cancelled_before_start else 'CANCELLATION_REQUESTED'
+    if cancelled_before_start:
+        task.completed_at = datetime.utcnow()
+    db.session.commit()
+    return success_response(task.to_dict(), status_code=202)
+
+
+@project_bp.route('/<project_id>/outline-versions', methods=['GET'])
+def list_outline_versions(project_id):
+    """List immutable outline snapshots, creating V1 for legacy projects."""
+    project = Project.query.get(project_id)
+    if not project:
+        return not_found('Project')
+    if project.pages and not OutlineVersion.query.filter_by(project_id=project_id).first():
+        ensure_current_version(project_id)
+        db.session.commit()
+    versions = OutlineVersion.query.filter_by(project_id=project_id).order_by(OutlineVersion.version_number.desc()).all()
+    return success_response({'versions': [version.to_dict() for version in versions]})
+
+
+@project_bp.route('/<project_id>/descriptions/confirm', methods=['POST'])
+def confirm_descriptions(project_id):
+    project = Project.query.get(project_id)
+    if not project:
+        return not_found('Project')
+    if project.current_outline_version_id and project.confirmed_outline_version_id != project.current_outline_version_id:
+        return error_response('OUTLINE_CONFIRMATION_REQUIRED', '请先确认当前大纲版本。', 409)
+    pages = Page.query.filter_by(project_id=project_id).order_by(Page.order_index).all()
+    missing = [page.id for page in pages if not page.description_content]
+    if not pages or missing:
+        return error_response(
+            'DESCRIPTIONS_INCOMPLETE',
+            f'还有 {len(missing)} 页缺少逐页描述。',
+            409,
+            {'missing_page_ids': missing},
+        )
+    project.descriptions_confirmed_at = datetime.utcnow()
+    project.status = 'DESCRIPTIONS_CONFIRMED'
+    db.session.commit()
+    return success_response({
+        'confirmed_at': project.descriptions_confirmed_at.isoformat() + 'Z',
+        'page_count': len(pages),
+    })
+
+
+@project_bp.route('/<project_id>/outline-versions/<version_id>/confirm', methods=['POST'])
+def confirm_outline(project_id, version_id):
+    try:
+        version = confirm_outline_version(project_id, version_id)
+        db.session.commit()
+        return success_response({'version': version.to_dict(), 'message': '大纲已确认，可以生成逐页描述。'})
+    except ValueError:
+        db.session.rollback()
+        return not_found('Outline version')
+
+
+@project_bp.route('/<project_id>/outline-versions/snapshot', methods=['POST'])
+def snapshot_outline(project_id):
+    project = Project.query.get(project_id)
+    if not project:
+        return not_found('Project')
+    data = request.get_json(silent=True) or {}
+    version = create_outline_version(project_id, instruction=data.get('instruction') or '手动编辑大纲')
+    db.session.commit()
+    return success_response({'version': version.to_dict()})
+
+
+@project_bp.route('/<project_id>/outline-versions/<version_id>/restore', methods=['POST'])
+def restore_outline(project_id, version_id):
+    project = Project.query.get(project_id)
+    version = OutlineVersion.query.filter_by(id=version_id, project_id=project_id).first()
+    if not project or not version:
+        return not_found('Outline version')
+    pages_data = []
+    for item in version.outline():
+        content = dict(item.get('outline_content') or {})
+        if item.get('part'):
+            content['part'] = item['part']
+        pages_data.append(content)
+    _smart_merge_pages(project_id, pages_data)
+    restored = create_outline_version(project_id, instruction=f'恢复自 V{version.version_number}', force=True)
+    project.status = 'OUTLINE_GENERATED'
+    db.session.commit()
+    return success_response({'version': restored.to_dict(), 'pages': [page.to_dict() for page in project.pages]})
+
+
 @project_bp.route('/<project_id>/refine/outline', methods=['POST'])
 def refine_outline(project_id):
     """
@@ -1208,6 +1364,7 @@ def refine_outline(project_id):
             current_outline = []  # 空大纲
         else:
             current_outline = _reconstruct_outline_from_pages(pages)
+        parent_version = ensure_current_version(project_id) if pages else None
         
         # Get singleton AI service instance
         ai_service = get_ai_service()
@@ -1240,6 +1397,12 @@ def refine_outline(project_id):
         # Flatten outline to pages and smart merge with existing
         pages_data = ai_service.flatten_outline(refined_outline)
         pages_list = _smart_merge_pages(project_id, pages_data)
+        outline_version = create_outline_version(
+            project_id,
+            instruction=user_requirement,
+            parent=parent_version,
+            force=True,
+        )
 
         preserved_count = sum(1 for p in pages_list if p.description_content)
         new_count = len(pages_list) - preserved_count
@@ -1259,6 +1422,7 @@ def refine_outline(project_id):
         # Return pages
         return success_response({
             'pages': [page.to_dict() for page in pages_list],
+            'outline_version': outline_version.to_dict(),
             'message': '大纲修改成功'
         })
     

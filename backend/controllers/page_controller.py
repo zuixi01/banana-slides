@@ -306,6 +306,7 @@ def update_page_description(project_id, page_id):
             return bad_request("description_content is required")
         
         page.set_description_content(data['description_content'])
+        page.status = 'DESCRIPTION_GENERATED'
         page.updated_at = datetime.utcnow()
         
         # Update project
@@ -320,6 +321,26 @@ def update_page_description(project_id, page_id):
     except Exception as e:
         db.session.rollback()
         return error_response('SERVER_ERROR', str(e), 500)
+
+
+@page_bp.route('/<project_id>/pages/<page_id>/description/restore', methods=['POST'])
+def restore_page_description(project_id, page_id):
+    page = Page.query.get(page_id)
+    if not page or page.project_id != project_id:
+        return not_found('Page')
+    if not page.previous_description_content:
+        return bad_request('No description snapshot is available')
+    current = page.description_content
+    page.description_content = page.previous_description_content
+    page.previous_description_content = current
+    page.image_stale = bool(page.generated_image_path)
+    page.status = 'DESCRIPTION_GENERATED'
+    project = Project.query.get(project_id)
+    if project:
+        project.descriptions_confirmed_at = None
+        project.updated_at = datetime.utcnow()
+    db.session.commit()
+    return success_response(page.to_dict())
 
 
 @page_bp.route('/<project_id>/pages/<page_id>/generate/description', methods=['POST'])
@@ -341,6 +362,12 @@ def generate_page_description(project_id, page_id):
         project = Project.query.get(project_id)
         if not project:
             return not_found('Project')
+        if project.current_outline_version_id and not project.descriptions_confirmed_at:
+            return error_response(
+                'DESCRIPTION_CONFIRMATION_REQUIRED',
+                '请先确认逐页描述，再生成幻灯片图片。',
+                409,
+            )
         
         data = request.get_json() or {}
         force_regenerate = data.get('force_regenerate', False)
@@ -833,6 +860,29 @@ def set_current_image_version(project_id, page_id, version_id):
     except Exception as e:
         db.session.rollback()
         return error_response('SERVER_ERROR', str(e), 500)
+
+
+@page_bp.route('/<project_id>/pages/<page_id>/image-versions/<version_id>', methods=['DELETE'])
+def delete_image_version(project_id, page_id, version_id):
+    page = Page.query.get(page_id)
+    if not page or page.project_id != project_id:
+        return not_found('Page')
+    version = PageImageVersion.query.filter_by(id=version_id, page_id=page_id).first()
+    if not version:
+        return not_found('Image Version')
+    if version.is_current:
+        return error_response('CURRENT_VERSION_DELETE_FORBIDDEN', '当前图片版本不能删除，请先切换到其他版本。', 409)
+    file_service = FileService(current_app.config['UPLOAD_FOLDER'])
+    paths = [version.image_path, file_service.get_cached_image_path(project_id, page_id, version.version_number)]
+    deleted_files = 0
+    for relative_path in paths:
+        absolute_path = Path(file_service.get_absolute_path(relative_path))
+        if absolute_path.exists() and absolute_path.is_file():
+            absolute_path.unlink()
+            deleted_files += 1
+    db.session.delete(version)
+    db.session.commit()
+    return success_response({'version_id': version_id, 'deleted_files': deleted_files})
 
 
 @page_bp.route('/<project_id>/pages/<page_id>/regenerate-renovation', methods=['POST'])

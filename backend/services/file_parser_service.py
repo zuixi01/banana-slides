@@ -13,7 +13,6 @@ from typing import Optional, List, Union
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from PIL import Image
-from markitdown import MarkItDown
 from services.ai_providers.text import strip_think_tags
 
 logger = logging.getLogger(__name__)
@@ -296,6 +295,11 @@ class FileParserService:
             Tuple of (batch_id, markdown_content, extract_id, error_message, failed_image_count)
         """
         try:
+            # MarkItDown imports Magika/ONNX at module import time. Some Windows
+            # machines do not have the optional ONNX runtime DLLs, which should
+            # not prevent text/PDF parsing or the backend from starting.
+            from markitdown import MarkItDown
+
             # Use markitdown to convert spreadsheet to markdown
             md = MarkItDown()
             result = md.convert(file_path)

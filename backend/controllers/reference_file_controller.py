@@ -5,7 +5,7 @@ import os
 import logging
 import re
 import uuid
-from flask import Blueprint, request, current_app
+from flask import Blueprint, request, current_app, g
 from werkzeug.utils import secure_filename
 from pathlib import Path
 from config import Config
@@ -75,6 +75,15 @@ def _parse_file_async(file_id: str, file_path: str, filename: str, app):
             # Parse file
             logger.info(f"Starting to parse file: {filename}")
             batch_id, markdown_content, extract_id, error_message, failed_image_count = parser.parse_file(file_path, filename)
+
+            db.session.expire_all()
+            reference_file = ReferenceFile.query.get(file_id)
+            if reference_file and reference_file.parse_status == 'cancel_requested':
+                reference_file.parse_status = 'cancelled'
+                reference_file.error_message = 'Parsing cancelled by user.'
+                reference_file.updated_at = datetime.utcnow()
+                db.session.commit()
+                return
             
             # Update database
             reference_file.mineru_batch_id = batch_id
@@ -312,17 +321,17 @@ def list_project_reference_files(project_id):
     try:
         # Special case: 'all' means list all files
         if project_id == 'all':
-            reference_files = ReferenceFile.query.all()
+            reference_files = ReferenceFile.query.filter_by(workspace_id=g.current_workspace_id).all()
         # Special case: 'global' or 'none' means list global files (not associated with any project)
         elif project_id in ['global', 'none']:
-            reference_files = ReferenceFile.query.filter_by(project_id=None).all()
+            reference_files = ReferenceFile.query.filter_by(project_id=None, workspace_id=g.current_workspace_id).all()
         else:
             # Verify project exists
             project = Project.query.get(project_id)
             if not project:
                 return not_found('Project')
             
-            reference_files = ReferenceFile.query.filter_by(project_id=project_id).all()
+            reference_files = ReferenceFile.query.filter_by(project_id=project_id, workspace_id=g.current_workspace_id).all()
         
         # 列表查询时不包含 markdown_content 和失败计数，加快响应速度
         return success_response({
@@ -355,7 +364,7 @@ def trigger_file_parse(file_id):
             })
         
         # 如果解析完成或失败，可以重新解析
-        if reference_file.parse_status in ['completed', 'failed']:
+        if reference_file.parse_status in ['completed', 'failed', 'cancelled']:
             reference_file.parse_status = 'pending'
             reference_file.error_message = None
             # 清空之前的解析结果，以便重新解析
@@ -388,6 +397,20 @@ def trigger_file_parse(file_id):
     except Exception as e:
         logger.error(f"Error triggering file parse: {str(e)}", exc_info=True)
         return error_response('SERVER_ERROR', str(e), 500)
+
+
+@reference_file_bp.route('/<file_id>/cancel-parse', methods=['POST'])
+def cancel_file_parse(file_id):
+    reference_file = ReferenceFile.query.get(file_id)
+    if not reference_file:
+        return not_found('Reference file')
+    if reference_file.parse_status not in {'parsing', 'pending', 'cancel_requested'}:
+        return success_response({'file': reference_file.to_dict(), 'message': 'Parsing is not active'})
+    reference_file.parse_status = 'cancel_requested' if reference_file.parse_status == 'parsing' else 'cancelled'
+    reference_file.error_message = 'Cancellation requested.'
+    reference_file.updated_at = datetime.utcnow()
+    db.session.commit()
+    return success_response({'file': reference_file.to_dict(), 'message': 'Cancellation requested'}, status_code=202)
 
 
 @reference_file_bp.route('/<file_id>/associate', methods=['POST'])

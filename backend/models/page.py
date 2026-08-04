@@ -20,8 +20,10 @@ class Page(db.Model):
     part = db.Column(db.String(200), nullable=True)  # Optional section name
     outline_content = db.Column(db.Text, nullable=True)  # JSON string
     description_content = db.Column(db.Text, nullable=True)  # JSON string
+    previous_description_content = db.Column(db.Text, nullable=True)
     generated_image_path = db.Column(db.String(500), nullable=True)  # Original PNG image path
     cached_image_path = db.Column(db.String(500), nullable=True)  # Compressed JPG thumbnail path
+    image_stale = db.Column(db.Boolean, nullable=False, default=False, server_default='0')
     narration_text = db.Column(db.Text, nullable=True)  # Plain text narration for TTS video export
     template_asset_id = db.Column(
         db.String(36),
@@ -76,7 +78,14 @@ class Page(db.Model):
     def set_description_content(self, data):
         """Set description_content as JSON string"""
         if data:
-            self.description_content = json.dumps(data, ensure_ascii=False)
+            from .description_schema import normalize_description
+            serialized = json.dumps(normalize_description(data), ensure_ascii=False)
+            if self.description_content and self.description_content != serialized:
+                self.previous_description_content = self.description_content
+                self.image_stale = bool(self.generated_image_path)
+            self.description_content = serialized
+            if self.project:
+                self.project.descriptions_confirmed_at = None
         else:
             self.description_content = None
     
@@ -103,8 +112,10 @@ class Page(db.Model):
             'part': self.part,
             'outline_content': self.get_outline_content(),
             'description_content': self.get_description_content(),
+            'has_description_snapshot': bool(self.previous_description_content),
             'narration_text': self.narration_text,
             'generated_image_url': display_image_url,
+            'image_stale': bool(self.image_stale),
             'template_asset_id': self.template_asset_id,
             'template_style_text': self.template_style_text,
             'template_selection_source': self.template_selection_source,

@@ -44,12 +44,15 @@
 # 忽略临时文档，但保留项目文档
 *.md
 !README.md
+!DECKFORGE_FORK.md
 !skills/**/*.md
 # !docs/**/*.md
 !docs/specs/cli-spec.md
 !docs/superpowers/specs/*.md
 !docs/superpowers/plans/*.md
 !docs/desktop-handover.md
+!docs/DECKFORGE_MIGRATION_RUNBOOK.md
+!docs/MIGRATION_ACCEPTANCE_REPORT.md
 !.github/**/*.md
 *.pyc
 .env
@@ -80,6 +83,7 @@ build/
 
 # 本地 ML 模型（RMBG 等）
 /models/
+/artifacts/
 
 # macOS 元数据
 .DS_Store
@@ -94,3 +98,4 @@ frontend/cap-real.mjs
 /banana-slides-landing.html
 /design-mockup.html
 /design-system-proposal.html
+placeholder.db

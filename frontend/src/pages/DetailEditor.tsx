@@ -133,7 +133,7 @@ const detailI18n = {
 import { Button, Loading, useToast, useConfirm, AiRefineInput, FilePreviewModal, ReferenceFileList, MaterialSelector, ImportMarkdownModal } from '@/components/shared';
 import { DescriptionCard } from '@/components/preview/DescriptionCard';
 import { useProjectStore } from '@/store/useProjectStore';
-import { refineDescriptions, getTaskStatus, addPages, updateProject, getSettings, updateSettings } from '@/api/endpoints';
+import { refineDescriptions, getTaskStatus, addPages, updateProject, getSettings, updateSettings, confirmDescriptions } from '@/api/endpoints';
 import { exportProjectToMarkdown, parseMarkdownPages } from '@/utils/projectUtils';
 
 // 详细程度图标 — 暂时屏蔽，效果不够理想
@@ -690,21 +690,29 @@ export const DetailEditor: React.FC = () => {
               variant="primary"
               size="sm"
               icon={<ArrowRight size={16} className="md:w-[18px] md:h-[18px]" />}
-              onClick={() =>
-                navigate(
+              onClick={async () => {
+                if (!projectId) return;
+                try {
+                  await confirmDescriptions(projectId);
+                  await syncProject(projectId);
                   currentProject.template_mode === 'multi'
-                    ? `/project/${projectId}/template-setup`
-                    : `/project/${projectId}/preview`
-                )
-              }
+                    ? navigate(`/project/${projectId}/template-setup`)
+                    : navigate(`/project/${projectId}/preview`, {
+                        state: { openTemplateSetup: true },
+                      });
+                } catch (error: any) {
+                  show({
+                    message: error?.response?.data?.error?.message || '确认逐页描述失败，请检查所有页面后重试。',
+                    type: 'error',
+                  });
+                }
+              }}
               disabled={!hasAllDescriptions || isRenovationProcessing}
               title={!hasAllDescriptions && !isRenovationProcessing ? t('detail.disabledNextTip', { count: missingDescCount }) : undefined}
               className="text-xs md:text-sm"
             >
               <span className="hidden sm:inline">
-                {currentProject.template_mode === 'multi'
-                  ? t('detail.toTemplateSetup')
-                  : t('detail.generateImages')}
+                {t('detail.toTemplateSetup')}
               </span>
             </Button>
           </div>
