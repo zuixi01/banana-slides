@@ -77,6 +77,7 @@
 | 旧 Deckforge production build | passed |
 | Banana frontend production build | passed |
 | `docker-compose.prod.yml` immutable image config | passed |
+| All-in-one Docker image local build | blocked：Docker VM 数据盘发生 EXT4 写入 I/O error；未自动重试 |
 | 真实浏览器验收 | passed |
 
 上游原有 Windows 路径分隔符和临时图片句柄问题已修复；测试模式不再读取本地 `.env`，防止真实 Provider 配置污染测试和失败日志。
@@ -100,6 +101,7 @@
 
 - 未配置用户 GitHub Fork `origin`。
 - 未向镜像仓库 push，因此还没有真实 registry digest；CI 已在 push 事件中实现 digest 记录。
+- 本地 all-in-one 镜像构建在 BuildKit 阶段触发 Docker VM `sdd` 写入 I/O error、EXT4 journal 更新失败并导致 Docker Desktop 停止。诊断时 C 盘仅剩约 3.22 GiB，Docker 数据盘 `docker_data.vhdx` 位于 C 盘且约 42.1 GiB。按失败熔断规则未自动重试、重启、迁移数据或清理缓存；继续前需要用户确认安全释放/扩容 C 盘并重启 Docker Desktop。
 - 未部署、构建、清理或重启任何远程服务器。
 - AGPL-3.0 本地开发不受阻；闭源商业 SaaS 发布前仍需商业授权或法律评估。
 
