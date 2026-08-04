@@ -18,3 +18,23 @@ def test_shell_scripts_are_declared_lf_in_git() -> None:
     attributes = (REPO_ROOT / ".gitattributes").read_text(encoding="utf-8")
 
     assert "*.sh text eol=lf" in attributes.splitlines()
+
+
+def test_allinone_routes_all_health_contracts_to_backend() -> None:
+    nginx = (REPO_ROOT / "docker" / "nginx-allinone.conf").read_text(
+        encoding="utf-8"
+    )
+
+    for path in ("/health", "/health/model", "/live", "/ready"):
+        assert f"location = {path} {{" in nginx
+
+
+def test_allinone_uses_production_wsgi_server() -> None:
+    dockerfile = (REPO_ROOT / "Dockerfile.allinone").read_text(encoding="utf-8")
+    start_script = (REPO_ROOT / "docker" / "start-backend.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "ENV FLASK_ENV=production" in dockerfile
+    assert "gunicorn" in start_script
+    assert "python app.py" not in start_script

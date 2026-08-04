@@ -92,6 +92,8 @@ RUN mkdir -p /app/backend/instance /app/uploads
 
 ENV PYTHONPATH=/app
 ENV FLASK_APP=backend/app.py
+ENV FLASK_ENV=production
+ENV PYTHONUNBUFFERED=1
 ENV IN_DOCKER=1
 ENV APP_VERSION_TAG=${APP_VERSION_TAG}
 ENV APP_COMMIT_SHA=${APP_COMMIT_SHA}
