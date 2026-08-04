@@ -82,8 +82,10 @@ COPY --from=frontend-builder /app/dist /usr/share/nginx/html
 COPY docker/nginx-allinone.conf /etc/nginx/conf.d/default.conf
 RUN rm -f /etc/nginx/sites-enabled/default
 
-# 启动脚本可执行
-RUN chmod +x /app/docker/start-backend.sh
+# Windows 检出可能将 shell 脚本转换为 CRLF；镜像内必须恢复 LF，
+# 否则 supervisor 会把 shebang 解析为 `/bin/sh\r` 并以 ENOENT 退出。
+RUN sed -i 's/\r$//' /app/docker/*.sh && \
+    chmod +x /app/docker/start-backend.sh
 
 # 创建必要目录
 RUN mkdir -p /app/backend/instance /app/uploads
