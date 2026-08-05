@@ -114,7 +114,7 @@ Docker Desktop 不可用时，可在 D 盘隔离的 `Ubuntu-24.04` WSL 构建环
 ```powershell
 wsl -d Ubuntu-24.04 -u root -- bash -lc "export STORAGE_DRIVER=vfs; buildah bud --format docker --isolation chroot --layers -f '/mnt/d/AI PPT/banana-slides-next/Dockerfile.allinone' --build-arg APP_COMMIT_SHA=<full-git-sha> --build-arg APP_COMMIT_SHORT_SHA=<short-git-sha> -t localhost/banana-slides-deckforge:sha-<short-git-sha> '/mnt/d/AI PPT/banana-slides-next'"
 
-wsl -d Ubuntu-24.04 -u root -- bash -lc "export STORAGE_DRIVER=vfs; podman run -d --name banana-g11-final -p 127.0.0.1:18080:80 localhost/banana-slides-deckforge:sha-<short-git-sha>"
+wsl -d Ubuntu-24.04 -u root -- bash -lc "export STORAGE_DRIVER=vfs; podman run -d --name banana-g11-final -p 127.0.0.1:18080:80 -v /var/lib/banana-slides/instance:/app/backend/instance -v /var/lib/banana-slides/uploads:/app/uploads localhost/banana-slides-deckforge:sha-<short-git-sha>"
 ```
 
 验收：

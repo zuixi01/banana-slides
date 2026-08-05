@@ -116,6 +116,7 @@
 - `/live`、`/ready`、`/health/model`。
 - 只读扫描器、幂等迁移器、默认新应用入口和 legacy 入口。
 - SHA 镜像 CI、禁止 production `latest`、精确部署/回滚手册。
+- Nginx 上传限制与后端 200MB 契约统一；all-in-one 运行时数据库和 uploads 使用持久化卷。
 
 ## 7. 外部动作与边界
 
