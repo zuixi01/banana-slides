@@ -1,6 +1,6 @@
 # Banana Slides × Deckforge 迁移最终验收报告
 
-日期：2026-08-04
+日期：2026-08-05
 
 上游基线：`828bf6dfa535083b4fa6f5bed097655847fe26e5`
 
@@ -79,6 +79,8 @@
 | `docker-compose.prod.yml` immutable image config | passed |
 | All-in-one Docker image local build | passed：Buildah Docker v2 image + Podman runtime |
 | 真实浏览器验收 | passed（含最终容器） |
+| Fork CI | passed：Run `30973030886`，test / mocked-e2e / image 全部成功 |
+| CI 关键闭环 | passed：1 test / Chromium / 15.6s |
 
 上游原有 Windows 路径分隔符和临时图片句柄问题已修复；测试模式不再读取本地 `.env`，防止真实 Provider 配置污染测试和失败日志。
 
@@ -91,6 +93,14 @@
 - 容器状态：`running / healthy`
 - 容器浏览器截图：`artifacts/migration/ui/g11-final-container.png`
 - `/health`、`/live`、`/ready` 均返回 JSON 200；隔离容器未注入凭据，因此 `/health/model` 按设计返回 JSON 503 `missing_credentials`。
+
+最终 registry 镜像（GitHub Actions 生成并推送）：
+
+- Fork：`zuixi01/banana-slides`
+- Git SHA：`be2433a3f78f52560a7c364968383f715dcaa4e7`
+- tag：`ghcr.io/zuixi01/banana-slides:sha-be2433a3f78f52560a7c364968383f715dcaa4e7`
+- registry digest：`sha256:f347a382823c6362ba939d619e87f11f25ab943b9e36dad12685c1bd712f79d3`
+- 精确引用：`ghcr.io/zuixi01/banana-slides@sha256:f347a382823c6362ba939d619e87f11f25ab943b9e36dad12685c1bd712f79d3`
 
 ## 6. 新增工程能力
 
@@ -107,10 +117,10 @@
 - 只读扫描器、幂等迁移器、默认新应用入口和 legacy 入口。
 - SHA 镜像 CI、禁止 production `latest`、精确部署/回滚手册。
 
-## 7. 未执行的外部动作
+## 7. 外部动作与边界
 
-- 未配置用户 GitHub Fork `origin`。
-- 未向镜像仓库 push，因此还没有真实 registry digest；CI 已在 push 事件中实现 digest 记录。
+- 已配置用户 Fork `origin` 并推送 `migration/deckforge-core`；未创建或合并上游 PR。
+- 已通过 Fork GitHub Actions 推送版本化 GHCR 镜像并记录真实 registry digest；未发布 `latest`。
 - Docker Desktop BuildKit 曾因 VM `sdd`/EXT4 写入 I/O error 停止，且 C 盘仅余约 3.22 GiB。按熔断规则未重启、清理或迁移原 Docker 数据；改在 D 盘隔离 WSL 环境使用 Buildah/Podman 完成镜像构建与容器验收，旧 Docker 数据保持原状。
 - 未部署、构建、清理或重启任何远程服务器。
 - AGPL-3.0 本地开发不受阻；闭源商业 SaaS 发布前仍需商业授权或法律评估。

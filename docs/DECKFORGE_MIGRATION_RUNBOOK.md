@@ -98,6 +98,15 @@ DOCKER_IMAGE_FRONTEND=registry.example/banana-frontend:sha-<git-sha>
 
 也可以使用 `image@sha256:<digest>`。
 
+当前已验收的 all-in-one CI 镜像：
+
+```text
+ghcr.io/zuixi01/banana-slides:sha-be2433a3f78f52560a7c364968383f715dcaa4e7
+ghcr.io/zuixi01/banana-slides@sha256:f347a382823c6362ba939d619e87f11f25ab943b9e36dad12685c1bd712f79d3
+```
+
+来源：GitHub Actions Run `30973030886`。正式发布优先使用第二行 digest 引用；不要改写成 `latest`。
+
 ### 5.1 本地 all-in-one 镜像验收
 
 Docker Desktop 不可用时，可在 D 盘隔离的 `Ubuntu-24.04` WSL 构建环境使用 Buildah/Podman；这只用于本地验收，不替代 CI 推送和服务器拉取不可变镜像的发布流程。
