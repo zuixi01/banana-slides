@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -29,6 +30,21 @@ def test_allinone_routes_all_health_contracts_to_backend() -> None:
         assert f"location = {path} {{" in nginx
 
 
+def test_nginx_upload_limits_match_the_backend_contract() -> None:
+    """Both container layouts must allow the 200 MB advertised by the UI/API."""
+    for relative_path in (
+        Path("docker/nginx-allinone.conf"),
+        Path("frontend/nginx.conf"),
+    ):
+        nginx = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+        match = re.search(r"client_max_body_size\s+(\d+)M;", nginx)
+
+        assert match, f"missing client_max_body_size in {relative_path}"
+        assert int(match.group(1)) >= 200, (
+            f"{relative_path} must not reject uploads accepted by Flask"
+        )
+
+
 def test_allinone_uses_production_wsgi_server() -> None:
     dockerfile = (REPO_ROOT / "Dockerfile.allinone").read_text(encoding="utf-8")
     start_script = (REPO_ROOT / "docker" / "start-backend.sh").read_text(
@@ -38,6 +54,14 @@ def test_allinone_uses_production_wsgi_server() -> None:
     assert "ENV FLASK_ENV=production" in dockerfile
     assert "gunicorn" in start_script
     assert "python app.py" not in start_script
+
+
+def test_allinone_declares_durable_runtime_paths() -> None:
+    dockerfile = (REPO_ROOT / "Dockerfile.allinone").read_text(encoding="utf-8")
+    dockerignore = (REPO_ROOT / ".dockerignore").read_text(encoding="utf-8")
+
+    assert 'VOLUME ["/app/backend/instance", "/app/uploads"]' in dockerfile
+    assert "**/instance/*.db" in dockerignore
 
 
 def test_ci_unit_job_skips_tests_that_require_a_live_server() -> None:

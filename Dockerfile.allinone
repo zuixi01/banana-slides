@@ -90,6 +90,10 @@ RUN sed -i 's/\r$//' /app/docker/*.sh && \
 # 创建必要目录
 RUN mkdir -p /app/backend/instance /app/uploads
 
+# Runtime state must outlive a replaceable container. Production/local runners
+# should bind these paths to named volumes or durable host directories.
+VOLUME ["/app/backend/instance", "/app/uploads"]
+
 ENV PYTHONPATH=/app
 ENV FLASK_APP=backend/app.py
 ENV FLASK_ENV=production

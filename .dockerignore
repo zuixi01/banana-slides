@@ -35,8 +35,9 @@ frontend/.vite/
 .DS_Store
 
 # Project specific
-instance/*.db
-instance/*.db-journal
+**/instance/*.db
+**/instance/*.db-*
+**/instance/*.db-journal
 uploads/
 *.log
 server.log
