@@ -38,3 +38,14 @@ def test_allinone_uses_production_wsgi_server() -> None:
     assert "ENV FLASK_ENV=production" in dockerfile
     assert "gunicorn" in start_script
     assert "python app.py" not in start_script
+
+
+def test_ci_unit_job_skips_tests_that_require_a_live_server() -> None:
+    workflow = (
+        REPO_ROOT / ".github" / "workflows" / "deckforge-migration-ci.yml"
+    ).read_text(encoding="utf-8")
+    backend_step = workflow.split("- name: Backend tests", 1)[1].split(
+        "- name: Frontend dependencies", 1
+    )[0]
+
+    assert "SKIP_SERVICE_TESTS: 'true'" in backend_step

@@ -35,6 +35,7 @@ jobs:
         env:
           TESTING: 'true'
           USE_MOCK_AI: 'true'
+          SKIP_SERVICE_TESTS: 'true'
           GOOGLE_API_KEY: mock-api-key-for-testing
       - name: Frontend dependencies
         run: cd frontend && npm ci
